@@ -1,0 +1,36 @@
+{
+  "name": "CSE 490 Project 6: thumbor",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+  "forwardPorts": [
+    8888
+  ],
+  "portsAttributes": {
+    "8888": {
+      "label": "thumbor image server",
+      "onAutoForward": "notify"
+    }
+  },
+  "containerEnv": {
+    "LITELLM_BASE_URL": "https://llmproxy.cs.washington.edu"
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh 2>&1 | tee ~/setup.log",
+  "postStartCommand": "bash .devcontainer/start-redis.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vivswan.litellm-vscode-chat",
+        "ms-python.python"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/workspaces/${localWorkspaceFolderBasename}/.venv/bin/python",
+        "workbench.startupEditor": "none",
+        "extensions.ignoreRecommendations": true
+      }
+    }
+  }
+}

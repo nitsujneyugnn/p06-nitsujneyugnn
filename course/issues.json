@@ -1,0 +1,224 @@
+[
+ {
+  "slug": "fill-no-upscale",
+  "title": "fit-in with fill and no_upscale returns the small image without its canvas",
+  "body": "## What happens today\n\nAsk for a small image inside a larger fit-in box, with a fill color and no_upscale. The server returns the source image at its own size. There is no colored canvas around it. An 80 by 50 source requested at 300 by 300 comes back as 80 by 50. The order of the two filters does not change the result.\n\n## What should happen\n\nno_upscale limits only the picture. It must not shrink the canvas. The response is 300 by 300. The fill color covers the canvas. The source sits in the middle at its own size. Both filter orders give the same picture. This holds in plain resize mode, fit-in mode and full-fit-in mode. An adaptive fit-in request still picks its orientation from the size the client asked for. A no_upscale request that uses orig as a dimension returns the image instead of an error.\n\n## How to see it\n\nStart the course server. Open this path in the browser:\n\n/unsafe/fit-in/300x300/filters:fill(red):no_upscale():format(png)/small.png\n\nsmall.png is an 80 by 50 blue rectangle. Today the browser shows only that blue rectangle. After the fix the browser shows a 300 by 300 red square with the blue rectangle centered inside it.\n\n## Where it came from\n\nThis is a real bug, reported on the thumbor project as thumbor/thumbor#1883 (https://github.com/thumbor/thumbor/issues/1883). The comments below this issue are that report's conversation, copied here by the course wizard.",
+  "labels": [
+   "menu"
+  ],
+  "upstream": "thumbor/thumbor#1883",
+  "thread": [
+   {
+    "author": "marcelometal",
+    "date": "2026-08-26",
+    "bot": false,
+    "body": "Thanks for the detailed report. I reproduced the behavior on thumbor 7.7.7 and opened #1884 with a fix.\n\nThe PR preserves the originally requested fill canvas while no_upscale continues to clamp the image content, and it includes regression coverage for both filter orders from this issue.\n\nCould you please test #1884 with your URL-generation setup and let us know whether it resolves the problem for you?"
+   },
+   {
+    "author": "nlemoine",
+    "date": "2026-08-26",
+    "bot": false,
+    "body": "Thanks a lot for the quick turnaround @marcelometal! It resolves the problem on my side.\n\nI ran stock 7.7.7 against the same image with your two changed files mounted over it, so the only difference is the diff. Source is `20x20.jpg` from your fixtures.\n\n```\n                                     base      #1884\nfit-in/400x300 no_upscale():fill     20x20     400x300\nfit-in/400x300 fill(ff0000):no_up()  20x20     400x300\n```\n\nI also checked the content is not upscaled to fill the restored canvas. Bounding box of everything that is not the `ff0000` fill:\n\n```\nno_upscale():fill    canvas 400x300   content 20x20 at +190+140\nupscale():fill       canvas 400x300   content 300x300 at +50+0\n```\n\nThe second row is only there to show the measurement can see an enlargement, so the first is a real negative.\n\nTwo things worth confirming are intended, since they are outside what I reported. The fix also changes requests without `fit-in`, plus `full-fit-in`, `adaptive-fit-in` and zero dimensions (all 20x20 before, 400x300 after, and `fit-in/400x0` gives 400x20). And it fires when only one axis is smaller than the box: `image.jpg` is 300x400, so `fit-in/400x300 no_upscale():fill` goes from 300x300 to 400x300. All look right to me, just wider than the issue described.\n\nOne note on the `orig` arm you added to `target_dimension`. It fixes a pre-existing 500 on `fit-in/origxorig/filters:fill(ff0000)` (500 before, 200 after), but `no_upscale()` still raises on `orig` in both builds, so the arm is not reachable through the combination this PR is about:\n\n```\nfit-in/origxorig/filters:no_upscale()   base 500   #1884 500\n```\n\nTraceback is in the `PHASE_AFTER_LOAD` filters, `TypeError: '<' not supported between instances of 'int' and 'str'`, which looks like the `min()` in `no_upscale` comparing an int against the string `orig`. Pre-existing and separate, I'll let you decide what you want to do with it."
+   },
+   {
+    "author": "marcelometal",
+    "date": "2026-08-26",
+    "bot": false,
+    "body": "Thanks for the thorough validation, especially the content bounding-box check.\n\nThe broader results you found are consistent with the intended semantics. `fill()` restores the requested canvas size, while `no_upscale()` limits the image content rather than the canvas. That applies with no fit mode, `full-fit-in`, `adaptive-fit-in`, and when only one source axis is smaller than the requested box. The `400x0` result becoming `400x20` is also expected: the zero dimension remains proportional to the no-upscaled content.\n\nThe `orig` failure is pre-existing and happens independently in the `PHASE_AFTER_LOAD` execution of `no_upscale()`, as you identified. I opened #1885 as a separate follow-up. It resolves `orig` to the source image dimension before applying `min()` and adds coverage for `origxorig`, `origxN`, `Nxorig`, and the full handler request that previously returned 500.\n\nThanks again for spotting and documenting that edge case."
+   },
+   {
+    "author": "nlemoine",
+    "date": "2026-08-27",
+    "bot": false,
+    "body": "#1885 is clean. Every `orig` 500 becomes a correct answer, numeric dimensions are identical to base, and the `RESPECT_ORIENTATION` swap above your changed lines works too (100x200 source with EXIF orientation 6: `orig` resolves to the displayed dimension and matches the no-filter row). Your new tests leave that branch off, so I checked it.\n\nOne case left, and stock 7.7.7 gets it wrong too, so it is not something either PR introduced.\n\nI took your semantics as a rule and tested it: adding `no_upscale()` should never change the canvas. It holds everywhere except `full-fit-in` and `adaptive-fit-in`. Both PRs applied, `400x300` requested:\n\n```\n                              source    fill()      no_upscale():fill()\nfull-fit-in/400x300           20x20     400x400     400x300\nfull-fit-in/400x300           300x400   400x533     400x400\nadaptive-fit-in/400x300       300x400   300x400     400x300\n```\n\nThe adaptive row looks wrong rather than debatable. With `fill()` alone the canvas is 300x400 portrait around 300x371 of content. Add `no_upscale()` and it is 400x300 landscape around 225x300 of content, so the canvas ends up the opposite orientation to both the source and its own content.\n\nMy guess, and this is where I stop being useful since I do not know the codebase: it seems to be about ordering. `no_upscale` has already rewritten the requested dimensions by the time the adaptive swap is evaluated, and for a 300x400 source with a 400x300 request the clamped box is square, which is presumably why the swap never fires. Stock 7.7.7 returns 300x300 there, so it was not swapping before either.\n\nProbably rare in practice and I have no view on whether it is worth acting on."
+   },
+   {
+    "author": "marcelometal",
+    "date": "2026-08-27",
+    "bot": false,
+    "body": "Thanks again -- your diagnosis was correct.\n\n`no_upscale()` was clamping the 400x300 request to 300x300 before the adaptive\ndecision, so the original orientation signal was lost. I updated #1884 so the\nadaptive orientation is decided from the preserved pre-filter request. When\nthe request has already been limited, those no-upscale bounds are reapplied\nafter swapping the axes.\n\nI added an end-to-end regression using the 300x400 fixture. The\n`adaptive-fit-in/400x300` request with `no_upscale():fill()` now returns 300x400\nand matches the complete fill-only image, so its content is no longer reduced\nunnecessarily either.\n\nI also added automated coverage for the `RESPECT_ORIENTATION` scenario you\nmanually tested to #1885. Both PRs still contain one commit.\n\nI left the non-adaptive `full-fit-in` results unchanged. In that mode the\ntransformed content can intentionally grow beyond the requested box, and the\nfill canvas follows it. Adding `no_upscale()` prevents that growth, so the\nresulting canvas can legitimately differ there.\n\nCould you test the updated #1884 once more when convenient and confirm that the\nadaptive result now matches what you expect?"
+   },
+   {
+    "author": "nlemoine",
+    "date": "2026-08-27",
+    "bot": false,
+    "body": "I just tested everything again and it looks good on my side. Thanks again for fixing this so quick @marcelometal! 🚀"
+   },
+   {
+    "author": "github-actions[bot]",
+    "date": "2026-09-27",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   }
+  ]
+ },
+ {
+  "slug": "rounded-corner-fringe",
+  "title": "Transparent rounded corners carry a dark ring",
+  "body": "## What happens today\n\nround_corner with the transparent flag set, written out as PNG or WebP, draws a thin dark outline along every curved corner. The pixels on the curve stay fully opaque and have their colors scaled toward black. Over any page background the corner looks as if it were traced with a dark pencil. The opaque form of the filter, without the transparent flag, blends its edge cleanly into the fill color.\n\n## What should happen\n\nThe curve is smoothed through the alpha channel. Pixels on the edge keep their original color and become partly transparent, so the picture fades into whatever is behind it with no outline. Output formats without alpha, such as JPEG, should still show the fill color in the corners.\n\n## How to see it\n\nStart the image server and open this path in the browser:\n\n/unsafe/300x200/filters:round_corner(60,255,255,255,1):format(png)/example.jpg\n\nZoom into any corner of the picture. Today a dark ring follows the arc where the picture meets the background. After the fix the arc fades into the background with no ring. The same path with format(webp) in place of format(png) shows the same ring. The image file is example.jpg.\n\n## Where it came from\n\nThis is a real bug, reported on the thumbor project as thumbor/thumbor#1687 (https://github.com/thumbor/thumbor/issues/1687). The comments below this issue are that report's conversation, copied here by the course wizard.",
+  "labels": [
+   "menu"
+  ],
+  "upstream": "thumbor/thumbor#1687",
+  "thread": [
+   {
+    "author": "github-actions[bot]",
+    "date": "2024-10-12",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   },
+   {
+    "author": "ItsReddi",
+    "date": "2024-10-14",
+    "bot": false,
+    "body": "not stale"
+   },
+   {
+    "author": "github-actions[bot]",
+    "date": "2024-11-13",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   },
+   {
+    "author": "ItsReddi",
+    "date": "2024-11-20",
+    "bot": false,
+    "body": "Not Stale. Tagging @heynemann for more information"
+   },
+   {
+    "author": "marcelometal",
+    "date": "2026-09-07",
+    "bot": false,
+    "body": "Sorry for the long delay in getting back to you, and thank you for reporting this.\n\nI reproduced the dark border and opened #1905 with a fix. The filter now preserves\nthe original colors and smooths the rounded edges using transparency, which\nremoves the dark fringe. The PR also includes regression tests, and the full unit\nsuite passes."
+   }
+  ]
+ },
+ {
+  "slug": "gif-transparency",
+  "title": "Resized GIF loses its transparent background",
+  "body": "## What happens today\n\nSome GIF files use a palette and mark one palette entry as transparent. The sticker image in the course images folder is one of them. Its background is transparent, so the page shows through around the blue disc.\n\nAsk the image server for that GIF at a new size. The GIF that comes back is fully opaque. The area that used to be transparent is now a solid black box around the sticker.\n\nThe same request with PNG output keeps the transparency. The problem needs a palette source, GIF output, and the PILLOW_PRESERVE_INDEXED_MODE setting on. That setting is on by default.\n\n## What should happen\n\nA resize must not change which pixels are transparent. The GIF that comes back carries a transparency index. The pixels that were transparent in the source are transparent in the output. A GIF with no transparency stays opaque. PNG output keeps its partial alpha.\n\n## How to see it\n\nStart the image server with the course configuration. Open this path in the browser:\n\n/unsafe/240x160/sticker.gif\n\nToday you see the sticker inside a solid black box. After the fix the box is gone and the browser's own background shows around the sticker. The Pillow engine handles this request, not gifsicle.\n\n## Where it came from\n\nThis is a real bug, reported on the thumbor project as thumbor/thumbor#1886 (https://github.com/thumbor/thumbor/issues/1886). The comments below this issue are that report's conversation, copied here by the course wizard.",
+  "labels": [
+   "menu"
+  ],
+  "upstream": "thumbor/thumbor#1886",
+  "thread": [
+   {
+    "author": "marcelometal",
+    "date": "2026-08-27",
+    "bot": false,
+    "body": "Thanks for the detailed report and the useful format matrix. I reproduced the\nfailure on current `master` and opened #1887 with a fix.\n\nThe issue is in the indexed-mode path you identified. After resizing, Thumbor\nquantizes the RGBA image back to `P`; the resulting palette still contains its\nalpha values, but Pillow does not set `image.info[\"transparency\"]`. PNG can\nencode the palette alpha directly, while the GIF writer receives an already\nindexed image and therefore does not infer the single transparent index.\n\n#1887 restores that index from the fully transparent palette entry before GIF\nencoding and adds a regression test using the binary-alpha palette source from\nthis issue. With the default `PILLOW_PRESERVE_INDEXED_MODE = True`, the output\nnow retains `info[\"transparency\"] == 1` and the same 4,800 transparent pixels as\nthe working non-preserving path. The full CI matrix is green.\n\nCould you please test #1887 with your integration setup and confirm that it\nresolves the issue there as well?"
+   },
+   {
+    "author": "nlemoine",
+    "date": "2026-08-27",
+    "bot": false,
+    "body": "Works, thanks. Stock 7.7.7 with your `pil.py` mounted over it, default `PILLOW_PRESERVE_INDEXED_MODE = True`: the reporter goes from `tr=None` and 0 transparent pixels to `tr=1` and 4800, and opaque palette GIF, animated GIF, PNG output and WebP output are all byte identical to stock.\n\nTwo shapes beyond your regression test, in case they are useful. I compared the transparency mask against the source rather than just counting pixels, looking for transparent output where the source is solidly opaque:\n\n- two distinct fully transparent colours: mask matches exactly, and the output is identical to the truecolour version of the same picture down to the byte count. Quantize folds both into one entry, so the single index is enough.\n- fully opaque palette source: unchanged, no index set.\n\nA source with only partial alpha stays opaque, which looks right given GIF has 1 bit of alpha."
+   },
+   {
+    "author": "github-actions[bot]",
+    "date": "2026-09-27",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   }
+  ]
+ },
+ {
+  "slug": "extreme-aspect-crop",
+  "title": "Resizing a transparent image to a very wide, very short size returns an empty picture",
+  "body": "## What happens today\n\nAsk the image server for a picture at an aspect ratio far from the source's, and the result is empty or an error. A square transparent PNG requested at 800x20 comes back as an 800x20 image in which every pixel is fully transparent. The browser shows nothing where the picture should be. A very wide source asked to fit in a 1x1 box, or asked for a width only, returns a 500 error page instead of an image.\n\n## What should happen\n\nEvery request for a size of at least one pixel per side returns a real picture of that size. The 800x20 request should show the colored bars of the source stretched into a wide strip. The fit-in requests should return a 1x1 image and a 100x1 image.\n\n## How to see it\n\nStart the image server and open this path on it:\n\n    /unsafe/800x20/rainbow.png\n\nThe source is a 16x16 transparent PNG with vertical rainbow bars. Today the page shows a blank 800x20 image. After the fix the page shows a rainbow strip 800 pixels wide and 20 pixels tall.\n\nAlso open:\n\n    /unsafe/fit-in/1x1/940x2.png\n\nToday it shows a 500 error page. After the fix it shows a 1x1 image.\n\nAnd this one, a width only:\n\n    /unsafe/fit-in/100x0/940x2.png\n\nToday it shows a 500 error page. After the fix it shows a 100x1 image.\n\n## Where it came from\n\nThis is a real bug, reported on the thumbor project as thumbor/thumbor#1711 (https://github.com/thumbor/thumbor/issues/1711). The comments below this issue are that report's conversation, copied here by the course wizard.",
+  "labels": [
+   "menu"
+  ],
+  "upstream": "thumbor/thumbor#1711",
+  "thread": [
+   {
+    "author": "github-actions[bot]",
+    "date": "2025-02-23",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   },
+   {
+    "author": "camistoryblok",
+    "date": "2025-04-02",
+    "bot": false,
+    "body": "We still need help on this"
+   },
+   {
+    "author": "RaphaelVRossi",
+    "date": "2025-04-02",
+    "bot": false,
+    "body": "Hey @camistoryblok sorry about the delayed answer. By the way, can you share your thumbor.conf (without your security key) and which version of Thumbor are you running?"
+   },
+   {
+    "author": "github-actions[bot]",
+    "date": "2025-05-03",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   },
+   {
+    "author": "camistoryblok",
+    "date": "2025-06-11",
+    "bot": false,
+    "body": "Hello! I answered here, but it's similar: https://github.com/thumbor/thumbor/issues/1706\n\n@RaphaelVRossi"
+   },
+   {
+    "author": "camistoryblok",
+    "date": "2025-07-01",
+    "bot": false,
+    "body": "anyone?"
+   },
+   {
+    "author": "github-actions[bot]",
+    "date": "2025-07-31",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   },
+   {
+    "author": "camistoryblok",
+    "date": "2025-07-31",
+    "bot": false,
+    "body": "Hello?"
+   },
+   {
+    "author": "github-actions[bot]",
+    "date": "2025-08-31",
+    "bot": true,
+    "body": "This issue is stale because it has been open 30 days with no activity. Remove the stale label or add a comment, or this issue will be closed in 15 days. You can always re-open if you still feel this is still an issue. Tag @heynemann for more information."
+   },
+   {
+    "author": "RaphaelVRossi",
+    "date": "2025-09-02",
+    "bot": false,
+    "body": "Hey @camistoryblok sorry for the late response ~again~, I'll be able to look into this further today after work."
+   },
+   {
+    "author": "HarshAggarwal1",
+    "date": "2025-10-18",
+    "bot": false,
+    "body": "Hey can you please assign this issue to me"
+   },
+   {
+    "author": "HarshAggarwal1",
+    "date": "2025-11-09",
+    "bot": false,
+    "body": "Update: created a PR #1774 for this issue, kindly look into this"
+   },
+   {
+    "author": "camistoryblok",
+    "date": "2026-06-12",
+    "bot": false,
+    "body": "We run thumbor in production and this bug affects one of our users, so we dug deeper into the root cause — and it turns out it's **not a transparency bug**, which means #1774 won't fix it.\n\n**Root cause:** in `thumbor/transformer.py`, `auto_crop()` computes\n\n```python\ncrop_height = int(round(source_width * self.target_height / target_width, 0))\n```\n\nFor a 1x1 source resized to 50x25 this gives `round(0.5) = 0` (Python banker's rounding), so the image is cropped to `(0, 0, 1, 0)` — an empty 1x0 image. PIL's `resize()` on an empty image produces all-`(0,0,0,0)` pixels, which is exactly the \"image disappears\" symptom. 50x26 works because `round(0.52) = 1`. Any target ratio ≥ 2:1 on a 1x1 source triggers it.\n\n**Why #1774 doesn't help (and actually makes it worse):** the patched `resize()` calls `has_transparency()`, which does `min(self.image.convert(\"RGBA\").getchannel(\"A\").getextrema())`. On the empty cropped image `getextrema()` returns `None`, so the request now fails with a 500 (`TypeError: 'NoneType' object is not iterable`) instead of returning a wrong image. Reproduced on the `pr-1774` branch with Pillow 11.3.0.\n\n**Fix we validated** (clamping the crop to at least 1px, in `auto_crop()` right after the crop math):\n\n```python\ncrop_width = max(1, crop_width)\ncrop_height = max(1, crop_height)\n```\n\nWith this, every size we tested (50x25, 50x10, 30x15, 100x50, 500x1) returns the correct uniform RGBA pixel. Happy to open a PR with the fix + a regression test if that helps."
+   }
+  ]
+ },
+ {
+  "slug": "planted-visual",
+  "title": "Add a border filter that draws a solid band around the picture",
+  "body": "## What happens today\n\nA URL that asks for `filters:border(12,red)` returns the picture unchanged. The server answers 200. No band is drawn. Nothing in the response says the name was ignored.\n\n## What should happen\n\n`border(width, color)` adds a solid band of `width` pixels on all four sides of the picture. The picture keeps its own pixels. The output grows by twice the width in each dimension. The band is added after the crop and the resize, so the band is never scaled. `color` is a color name such as `red` or a hex value such as `ff0000`. `border(0,red)` leaves the picture alone. A transparent picture keeps its transparent inside and only the band is painted. The filter works together with the other filters in the same URL, in the order they are written.\n\n## How to see it\n\nStart the course server. Open this path against it:\n\n`/unsafe/240x180/filters:border(12,red)/hills.png`\n\nToday the browser shows the hills picture at 240 by 180 with no band. When the filter works, the browser shows the same picture inside a 12 pixel red band, 264 by 204.\n\n## Where it came from\n\nThis one is the course's own request. thumbor has no border filter and nobody has asked for one upstream, so there is no conversation to read.",
+  "labels": [
+   "menu"
+  ],
+  "upstream": null,
+  "thread": []
+ }
+]

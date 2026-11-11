@@ -1,0 +1,16 @@
+# Requirements
+
+All test images in this folder must be generated or freely licensed.
+
+They should ideally all be regenerated (or, should they not be possible to create from scratch, re-downloaded from a reliable source) via "make sample_images".
+
+# Licensed images
+
+[source.jpg and many variants](https://commons.wikimedia.org/wiki/File:Katherine_Maher.jpg) - Victor Grigas - [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.en)
+
+[watermark.svg watermark.png](https://commons.wikimedia.org/wiki/File:Wikimedia-logo.svg) - Public domain
+
+[redeye.png](https://commons.wikimedia.org/wiki/File:BoldRedEye.JPG) - Public domain
+
+[Guido-portrait-2014.jpg](https://commons.wikimedia.org/wiki/File:Guido-portrait-2014.jpg) - Daniel Stroud - [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.en)
+[PNG_transparency_demonstration_1.png](https://commons.wikimedia.org/wiki/File:PNG_transparency_demonstration_1.png) - Ed g2s - [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.en)
