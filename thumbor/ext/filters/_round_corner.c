@@ -142,21 +142,10 @@ _round_corner_apply(PyObject *self, PyObject *args)
             float aa = 1.f - ((idx / (float)pixel_count_x) * aa_amount);
 
             if (transparent == 1) {
-                ptr[top_left + r_idx] = (color_top_left[r_idx] * (1.f - aa));
-                ptr[top_left + g_idx] = (color_top_left[g_idx] * (1.f - aa));
-                ptr[top_left + b_idx] = (color_top_left[b_idx] * (1.f - aa));
-
-                ptr[bottom_left + r_idx] = (color_bottom_left[r_idx] * (1.f - aa));
-                ptr[bottom_left + g_idx] = (color_bottom_left[g_idx] * (1.f - aa));
-                ptr[bottom_left + b_idx] = (color_bottom_left[b_idx] * (1.f - aa));
-
-                ptr[top_right + r_idx] = (color_top_right[r_idx] * (1.f - aa));
-                ptr[top_right + g_idx] = (color_top_right[g_idx] * (1.f - aa));
-                ptr[top_right + b_idx] = (color_top_right[b_idx] * (1.f - aa));
-
-                ptr[bottom_right + r_idx] = (color_bottom_right[r_idx] * (1.f - aa));
-                ptr[bottom_right + g_idx] = (color_bottom_right[g_idx] * (1.f - aa));
-                ptr[bottom_right + b_idx] = (color_bottom_right[b_idx] * (1.f - aa));
+                ptr[top_left + a_idx] = (color_top_left[a_idx] * (1.f - aa));
+                ptr[bottom_left + a_idx] = (color_bottom_left[a_idx] * (1.f - aa));
+                ptr[top_right + a_idx] = (color_top_right[a_idx] * (1.f - aa));
+                ptr[bottom_right + a_idx] = (color_bottom_right[a_idx] * (1.f - aa));
             } else {
                 ptr[top_left + r_idx] = (color_top_left[r_idx] * (1.f - aa)) + (r * (aa));
                 ptr[top_left + g_idx] = (color_top_left[g_idx] * (1.f - aa)) + (g * (aa));
@@ -227,21 +216,10 @@ _round_corner_apply(PyObject *self, PyObject *args)
             float aa = 1.f - ((idx / (float)pixel_count_y) * aa_amount);
 
             if (transparent == 1) {
-                ptr[top_left + r_idx] = (color_top_left[r_idx] * (1.f - aa));
-                ptr[top_left + g_idx] = (color_top_left[g_idx] * (1.f - aa));
-                ptr[top_left + b_idx] = (color_top_left[b_idx] * (1.f - aa));
-
-                ptr[bottom_left + r_idx] = (color_bottom_left[r_idx] * (1.f - aa));
-                ptr[bottom_left + g_idx] = (color_bottom_left[g_idx] * (1.f - aa));
-                ptr[bottom_left + b_idx] = (color_bottom_left[b_idx] * (1.f - aa));
-
-                ptr[top_right + r_idx] = (color_top_right[r_idx] * (1.f - aa));
-                ptr[top_right + g_idx] = (color_top_right[g_idx] * (1.f - aa));
-                ptr[top_right + b_idx] = (color_top_right[b_idx] * (1.f - aa));
-
-                ptr[bottom_right + r_idx] = (color_bottom_right[r_idx] * (1.f - aa));
-                ptr[bottom_right + g_idx] = (color_bottom_right[g_idx] * (1.f - aa));
-                ptr[bottom_right + b_idx] = (color_bottom_right[b_idx] * (1.f - aa));
+                ptr[top_left + a_idx] = (color_top_left[a_idx] * (1.f - aa));
+                ptr[bottom_left + a_idx] = (color_bottom_left[a_idx] * (1.f - aa));
+                ptr[top_right + a_idx] = (color_top_right[a_idx] * (1.f - aa));
+                ptr[bottom_right + a_idx] = (color_bottom_right[a_idx] * (1.f - aa));
             } else {
                 ptr[top_left + r_idx] = (color_top_left[r_idx] * (1.f - aa)) + (r * (aa));
                 ptr[top_left + g_idx] = (color_top_left[g_idx] * (1.f - aa)) + (g * (aa));
@@ -258,6 +236,34 @@ _round_corner_apply(PyObject *self, PyObject *args)
                 ptr[bottom_right + r_idx] = (color_bottom_right[r_idx] * (1.f - aa)) + (r * (aa));
                 ptr[bottom_right + g_idx] = (color_bottom_right[g_idx] * (1.f - aa)) + (g * (aa));
                 ptr[bottom_right + b_idx] = (color_bottom_right[b_idx] * (1.f - aa)) + (b * (aa));
+            }
+        }
+    }
+
+    if (transparent == 1 && aa_enabled) {
+        float r_min = (float)(a_radius < b_radius ? a_radius : b_radius);
+        for (int py = 0; py < b_radius; ++py) {
+            for (int px = 0; px < a_radius; ++px) {
+                float cx = ((float)px + 0.5f - a_rad) / a_rad;
+                float cy = ((float)py + 0.5f - b_rad) / b_rad;
+                float s = ((float)sqrt(cx * cx + cy * cy) - 1.f) * r_min;
+                float cov = 0.5f - s;
+                if (cov < 0.f) {
+                    cov = 0.f;
+                }
+                if (cov > 1.f) {
+                    cov = 1.f;
+                }
+                int rows[2] = {py, height - 1 - py};
+                int cols[2] = {px, width - 1 - px};
+                for (int i = 0; i < 2; ++i) {
+                    for (int j = 0; j < 2; ++j) {
+                        int idx = num_bytes * ((rows[i] * width) + cols[j]) + a_idx;
+                        if (cov > 0.f && cov < 1.f) {
+                            ptr[idx] = (unsigned char)(255.f * cov);
+                        }
+                    }
+                }
             }
         }
     }
