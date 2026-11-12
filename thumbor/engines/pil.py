@@ -76,6 +76,7 @@ class Engine(BaseEngine):
         self.subsampling = None
         self.qtables = None
         self.original_mode = None
+        self.original_transparency = None
         self.exif = None
         self.iptc = None
 
@@ -110,6 +111,7 @@ class Engine(BaseEngine):
         self.icc_profile = img.info.get("icc_profile")
         self.exif = img.info.get("exif")
         self.original_mode = img.mode
+        self.original_transparency = img.info.get("transparency")
 
         if self.context.config.PRESERVE_IPTC_INFO:
             jpegiptc_object = JpegIPTC()
@@ -199,8 +201,25 @@ class Engine(BaseEngine):
             if self.image.mode == "1":
                 target_mode = "RGB"
             else:
-                # convert() figures out RGB or RGBA based on palette used
-                target_mode = None
+                # convert() figures out RGB or RGBA based on palette used, but
+                # it only honours a palette alpha channel. A palette that marks
+                # one index transparent (a GIF, say) converts to RGB and the
+                # transparency is lost, leaving a solid box around the subject.
+                # Converting through RGBA and re-applying the index keeps the
+                # transparent pixels transparent. See thumbor/thumbor#1886.
+                transparency = self.image.info.get("transparency")
+                if transparency is not None and not isinstance(
+                    transparency, bytes
+                ):
+                    # Read the indexed image as RGBA so the transparent
+                    # index becomes an alpha channel, then keep the index
+                    # around for the GIF writer in read().
+                    rgba = self.image.convert("RGBA")
+                    rgba.info["transparency"] = transparency
+                    self.image = rgba
+                    target_mode = None
+                else:
+                    target_mode = None
             self.image = self.image.convert(mode=target_mode)
 
         size = (int(width), int(height))
@@ -429,6 +448,20 @@ class Engine(BaseEngine):
             ):
                 # 26.10.22: remove ".heic, .heif" in a month(when pillow_heif get updated)
                 self.image = self.image.convert("RGBA")
+
+            if ext == ".gif" and self.image.mode == "P":
+                # quantize() builds a fresh palette and drops the source's
+                # transparency index, so a resized transparent GIF comes back
+                # as a solid box. Carry the index from the source, or from the
+                # current image, into the saved GIF.
+                # See thumbor/thumbor#1886.
+                transparency = self.image.info.get(
+                    "transparency", self.original_transparency
+                )
+                if transparency is not None and not isinstance(
+                    transparency, bytes
+                ):
+                    options["transparency"] = transparency
 
             self.image.format = FORMATS.get(
                 ext, FORMATS[self.get_default_extension()]
